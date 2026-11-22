@@ -6,6 +6,7 @@ import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
@@ -27,12 +28,16 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
-     * 业务异常。
+     * 业务异常。HTTP 状态码与响应体 code 对齐（可通过异常 code 透传 4xx/5xx）。
      */
     @ExceptionHandler(BaseException.class)
-    public R<Void> handleBaseException(BaseException e) {
+    public ResponseEntity<R<Void>> handleBaseException(BaseException e) {
         log.warn("业务异常: {}", e.getMessage());
-        return R.fail(e.getCode(), e.getMessage());
+        HttpStatus status = HttpStatus.resolve(e.getCode());
+        if (status == null) {
+            status = HttpStatus.INTERNAL_SERVER_ERROR;
+        }
+        return ResponseEntity.status(status).body(R.fail(e.getCode(), e.getMessage()));
     }
 
     /**
