@@ -19,6 +19,11 @@
             <groupId>com.draftagent</groupId>
             <artifactId>draft-agent-common</artifactId>
         </dependency>
+        <!-- Spring AOP：支持切面编程 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aop</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.draftagent</groupId>
             <artifactId>draft-agent-system</artifactId>

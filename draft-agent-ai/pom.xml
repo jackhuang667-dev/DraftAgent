@@ -19,5 +19,9 @@
             <groupId>com.draftagent</groupId>
             <artifactId>draft-agent-common</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
     </dependencies>
 </project>
