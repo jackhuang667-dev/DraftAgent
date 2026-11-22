@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.draftagent</groupId>
+        <artifactId>draft-agent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>draft-agent-start</artifactId>
+    <name>draft-agent-start</name>
+    <description>项目启动模块 - 应用入口与配置</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-system</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-business</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-ai</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

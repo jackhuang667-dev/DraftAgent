@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.4.12</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.draftagent</groupId>
+    <artifactId>draft-agent</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>draft-agent</name>
+    <description>智能草案预订单管理平台 - 模块化单体架构</description>
+
+    <modules>
+        <module>draft-agent-common</module>
+        <module>draft-agent-security</module>
+        <module>draft-agent-system</module>
+        <module>draft-agent-business</module>
+        <module>draft-agent-ai</module>
+        <module>draft-agent-start</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+
+        <draft-agent.version>1.0.0-SNAPSHOT</draft-agent.version>
+        <mybatis-plus.version>3.5.12</mybatis-plus.version>
+        <mysql.version>8.0.33</mysql.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- 内部模块 -->
+            <dependency>
+                <groupId>com.draftagent</groupId>
+                <artifactId>draft-agent-common</artifactId>
+                <version>${draft-agent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.draftagent</groupId>
+                <artifactId>draft-agent-security</artifactId>
+                <version>${draft-agent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.draftagent</groupId>
+                <artifactId>draft-agent-system</artifactId>
+                <version>${draft-agent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.draftagent</groupId>
+                <artifactId>draft-agent-business</artifactId>
+                <version>${draft-agent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.draftagent</groupId>
+                <artifactId>draft-agent-ai</artifactId>
+                <version>${draft-agent.version}</version>
+            </dependency>
+
+            <!-- MyBatis-Plus (Spring Boot 3) -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+
+            <!-- MySQL 驱动 -->
+            <dependency>
+                <groupId>com.mysql</groupId>
+                <artifactId>mysql-connector-j</artifactId>
+                <version>${mysql.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <source>17</source>
+                        <target>17</target>
+                        <encoding>UTF-8</encoding>
+                        <parameters>true</parameters>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <configuration>
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>
