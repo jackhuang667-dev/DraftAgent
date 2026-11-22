@@ -19,9 +19,9 @@ public class LogAspect {
     @Before("@annotation(logRecord)")
     public void recordLog(LogRecord logRecord) {
 
-        System.out.println("========== 操作日志 ===Unbound pointcut parameter 'logRecord' =======");
+        System.out.println("========== 操作日志 =======");
         System.out.println("检测到 LogRecord 注解");
         System.out.println("开始执行日志记录");
-        System.out.println(logRecord);
+        System.out.println(logRecord.value());
     }
 }
