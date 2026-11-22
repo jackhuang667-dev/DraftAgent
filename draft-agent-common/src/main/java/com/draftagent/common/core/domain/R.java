@@ -1,5 +1,6 @@
 package com.draftagent.common.core.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.io.Serializable;
@@ -56,6 +57,7 @@ public class R<T> implements Serializable {
         return new R<>(code, msg, null);
     }
 
+    @JsonIgnore
     public boolean isSuccess() {
         return this.code == SUCCESS;
     }

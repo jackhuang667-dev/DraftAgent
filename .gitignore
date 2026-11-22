@@ -37,3 +37,14 @@ build/
 ### Logs ###
 *.log
 logs/
+
+### Local sensitive config ###
+application-local.yml
+application-local.yaml
+application-local.properties
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties
+.env
+.env.*
+!.env.example
