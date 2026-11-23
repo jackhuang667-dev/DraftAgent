@@ -19,6 +19,11 @@
             <groupId>com.draftagent</groupId>
             <artifactId>draft-agent-common</artifactId>
         </dependency>
+        <!-- AI 模块单向依赖业务模块：工具通过业务 Service 访问，不直接操作 Mapper -->
+        <dependency>
+            <groupId>com.draftagent</groupId>
+            <artifactId>draft-agent-business</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>

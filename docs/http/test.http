@@ -1,0 +1,28 @@
+### 查询草案状态
+GET http://localhost:8080/draft-agent/drafts/2/status
+Accept: application/json
+
+### 普通 AI 对话
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "message": "你好，请用一句话介绍你自己。"
+}
+
+### 直接调用 Java 接口创建草案（不经过 AI）
+POST http://localhost:8080/draft-agent/drafts
+Content-Type: application/json
+
+{
+  "title": "数据库直连验证-A7K9",
+  "content": "用于验证 DraftService 是否能够直接连接 MySQL 并保存草案。"
+}
+
+### DeepSeek 真实 Tool Calling 测试
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "message": "请帮我创建一份草案。标题：Tool Calling真实验证-B8K2。内容：这是一条用于验证DraftAgent通过DeepSeek调用createDraft工具并保存到MySQL的测试草案。请调用创建草案工具完成保存，并告诉我草案ID。"
+}

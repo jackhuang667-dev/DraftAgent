@@ -1,5 +1,6 @@
 package com.draftagent.ai.service;
 
+import com.draftagent.ai.tool.DraftTools;
 import com.draftagent.common.core.exception.ServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,8 +28,11 @@ public class AiService {
 
     private final ObjectProvider<ChatClient> chatClientProvider;
 
-    public AiService(ObjectProvider<ChatClient> chatClientProvider) {
+    private final DraftTools draftTools;
+
+    public AiService(ObjectProvider<ChatClient> chatClientProvider, DraftTools draftTools) {
         this.chatClientProvider = chatClientProvider;
+        this.draftTools = draftTools;
     }
 
     public String chat(String message) {
@@ -39,6 +43,7 @@ public class AiService {
         try {
             return chatClient.prompt()
                     .user(message)
+                    .tools(draftTools)
                     .call()
                     .content();
         } catch (NonTransientAiException e) {

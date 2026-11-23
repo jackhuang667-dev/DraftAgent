@@ -223,10 +223,11 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 **C. 日志泄露检查** ✅ 已测试
 - 在应用日志中检索 Key 片段（`PLACEHOLDER-LEAKCHECK/ABCD1234/sk-PLACEHOLDER`）→ **未发现**。
 
-**未验证（缺少真实 Key）** ❌
-- 使用**真实 Key 成功返回模型回答**（端到端成功链路）未验证。
-- 使用真实 Key 时的正常启动/长响应/超时行为未验证。
-- Tool Calling、流式输出、多轮会话均未实现/未验证。
+**验证状态更新（2026-11-23）** ✅/⚠️
+- 真实 DeepSeek 基础对话已成功（`/ai/chat` 返回 200）。
+- `createDraft` Tool Calling 真实端到端已完成，草案成功落库（详见第 13.5 节）。
+- 长响应/超时行为仍未专门验证。
+- 流式输出、多轮会话仍未实现/未验证。
 
 > 注：终端中文乱码为 Windows 控制台 GBK 显示问题；HTTP 响应体为正确 UTF-8。
 
@@ -245,7 +246,7 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 
 ## 11. 尚未解决的问题 / 已知风险
 
-1. **真实 Key 端到端成功未验证**：环境无真实 `DEEPSEEK_API_KEY`，仅验证到「真实请求已发出、占位 Key 返回 502 认证失败」。
+1. **真实 Key 端到端（已更新 2026-11-23）**：真实 DeepSeek Tool Calling E2E 已完成，`createDraft` 成功落库（ID=4，状态 DRAFT）；原「未验证」限制已解除，详见第 13.5 节。
 2. **上游异常分类依赖消息文本**：`classifyUpstreamFailure` 依据异常消息是否含 `401/403/authentication` 判定，若 DeepSeek 文案变化需调整；未解析响应体（有意避免敏感信息落日志）。
 3. **排除范围较宽**：为保证无 Key 可启动，排除了全部 6 个 OpenAI 自动配置；将来如需 embedding/图像/语音等能力，需在 `AiConfig` 中另行按条件装配。
 4. **`No MyBatis mapper was found` 警告**：system 模块尚无 mapper，`@MapperScan("com.draftagent.**.mapper")` 暂无目标，属已知现状。
@@ -301,3 +302,60 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 - 异常处理：`draft-agent-common/src/main/java/com/draftagent/common/core/exception/GlobalExceptionHandler.java`
 - 安全配置：`draft-agent-security/src/main/java/com/draftagent/security/config/SecurityConfig.java`
 - AI 组件：`draft-agent-ai/src/main/java/com/draftagent/ai/{config,controller,service,dto}/`
+
+---
+
+## 13. 增量实施记录：createDraft Tool（第二轮 Tool Calling）
+
+> 说明：本文件第 1–12 节为早期交接内容（以提交 `69d503b` 为基准），已与当前工作区不完全一致。
+> 当前真实能力以本节及工作区代码为准：business 已具备草案持久化与读写接口，ai 已依赖 business 并注册两个工具。
+
+### 13.1 本次功能
+- 新增 `createDraft` Tool：用户自然语言提供标题与内容 → 模型选择 `createDraft` 工具 → 调用 `DraftService.createDraft(title, content)` 落库 MySQL → 返回 `draftId/title/status/createdAt`。
+- 工具层仅做参数接收与委托，复用现有业务逻辑，不直接访问 Mapper；AI 不直接操作数据库。
+
+### 13.2 修改文件（本次）
+- 修改：`draft-agent-ai/src/main/java/com/draftagent/ai/tool/DraftTools.java`
+  - 新增 `@Tool(name="createDraft")`，参数 `title`、`content` 均为 `@ToolParam(required=true)`。
+  - 返回 `DraftCreateResponse`（复用现有 DTO，未新增 DTO）。
+  - 类注释更新为「查询 + 创建」两种工具。
+- 修改：`PROJECT_STATUS.md`（本记录）。
+- 未改动：`AiService`、`AiConfig`、`DraftService`、`pom.xml`、安全配置、数据库配置。
+- 工作区此前未提交的 business/ai 增量（持久化、DraftStatusView、DraftController 等）保留未回滚。
+
+### 13.3 构建结果
+- 命令：`mvn clean install -DskipTests`（Maven 3.9.2 / JDK 17.0.19）
+- 结果：`EXIT_CODE=0`，7 个反应堆模块全部 `SUCCESS`，`BUILD SUCCESS`。
+
+### 13.4 工具注册验证
+- 使用 Spring AI `MethodToolCallbackProvider` 对 `new DraftTools(null)` 反射枚举工具（不触发业务调用）。
+- 结果：`TOOL_COUNT=2`，识别到 `queryDraftStatus` 与 `createDraft`。
+- `createDraft` 输入 schema：`required = [ "title", "content" ]`，两参数均为 string。
+
+### 13.5 验证结果（真实 DeepSeek Tool Calling E2E，2026-11-23）
+- **已完成真实 DeepSeek 自然语言 Tool Calling 端到端验证**：自然语言 → 模型选择 `createDraft` → `DraftService.createDraft` → MySQL 落库 → 回传草案 ID。
+- 验证结果：`createDraft` 成功调用，MySQL 中草案 **ID=4**、标题 `Tool Calling真实验证-B8K2`、状态 `DRAFT`；其中 ID 与状态已通过 `GET /drafts/4/status` 复核（`found=true`、`status=DRAFT`）。
+- 已验证：编译构建、工具 Bean/回调注册、schema 正确性、真实基础对话（`/ai/chat` 返回 200）、真实 `createDraft` 工具落库。
+- 仍存在限制：无自动化测试覆盖；未专门验证高并发、超时、幂等等边界。
+
+### 13.6 风险
+1. **安全**：`/ai/chat` 仍 `permitAll` 无鉴权，新增写工具后等同开放匿名创建草案；对外暴露前必须接入认证/权限。
+2. **重复创建**：模型重试或语义模糊可能多次调用，当前无幂等键；已在工具描述中约束「一次请求只调用一次」。
+3. **参数编造**：模型可能编造或遗漏标题/内容；遗漏由业务校验拦截，编造内容无法自动识别。
+4. **工具异常**：Spring AI 1.0.9 默认 `DefaultToolExecutionExceptionProcessor` 为 `alwaysThrow=false`（已核实字节码），异常预计以错误文本回传模型，但真实链路行为尚未实测。
+5. **序列化**：工具结果经 Spring AI `JsonParser`（含 classpath Jackson 模块）序列化，`LocalDateTime` 预期可用，真实链路未测。
+
+### 13.7 下一步
+- 为 `/ai/chat` 及写接口接入认证/权限。
+- 视需要为 createDraft 增加幂等与调用审计。
+- 真实 Key 自然语言 Tool Calling 端到端回归已完成（2026-11-23）；后续补充自动化测试。
+- 评审/决策/下单等工具暂不实现。
+
+### 13.8 本地环境提示（不写入仓库凭据）
+- 本地运行所需 `DB_PASSWORD`、`DEEPSEEK_API_KEY` 仅通过本地环境变量 / IDE 运行配置提供，真实值不写入 Git，也不记录在本文档。
+
+### 13.9 安全状态（重要）
+- `SecurityConfig` 当前为 `permitAll`：`/ai/chat`、`POST /drafts`、`GET /drafts/{id}/status` 均无认证/授权。
+- `createDraft` 为写工具，匿名调用即可创建草案；当前配置**仅适合本地开发测试，不可直接暴露到公网**。
+- 上线前必须接入认证/授权、限流与审计；写接口与写工具需单独授权。
+- `DB_PASSWORD`、`DEEPSEEK_API_KEY` 仅存在于本地运行环境，不进入 Git；文档与源码均不含真实凭据。
