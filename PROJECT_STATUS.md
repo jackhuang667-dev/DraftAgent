@@ -496,3 +496,47 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 ### 16.6 已知限制 / 下一步
 - 会话锁仅单 JVM；`SPRING_AI_CHAT_MEMORY` 与业务表非跨存储原子事务；HTTP 请求整体不幂等（仅 createDraft 按 requestId 幂等）；无登录/注册，JWT 由受信任签发方生成（未暴露 HTTP 发号接口）。
 - 建议下一步：先完成 16.3 的 4 项安全加固，再进入 RAG（RAG 必须沿用 `CurrentUser` 做 user/tenant 过滤）。
+
+---
+
+## 17. Batch 3.2：Document / Chunk 数据模型（已完成，未提交）
+
+> 本节记录 RAG 数据模型落地情况。仅完成 MySQL 表 + Java Entity/Mapper；**未**创建 Service/Controller，**未**实现文件处理、Embedding、Qdrant。HEAD 为 `d4a92f6`，本节改动尚未 commit/push。
+
+### 17.1 新增文件
+- `docs/sql/document_schema.sql`：`document`、`document_chunk` 建表脚本（Batch 3.2.1 已更新归属约束）。
+- `docs/sql/document_tenant_shared_v1.sql`：Batch 3.2.1 迁移脚本（`user_id` 改 NOT NULL + 索引重命名，含执行前检查）。
+- `draft-agent-business/.../entity/Document.java`、`entity/DocumentChunk.java`。
+- `draft-agent-business/.../mapper/DocumentMapper.java`、`mapper/DocumentChunkMapper.java`。
+
+### 17.2 表结构（已实测 SHOW CREATE TABLE，含 Batch 3.2.1）
+- `document`：`document_pk BIGINT AUTO_INCREMENT` 主键；`document_id CHAR(36)` 唯一；**`user_id BIGINT NOT NULL`（上传者）**；**`tenant_id BIGINT NULL`（文档共享边界）**；`filename`、`storage_path`、`mime_type`；`file_size BIGINT`；`checksum CHAR(64)`；`status VARCHAR(20) DEFAULT 'PENDING'`；`chunk_count INT`；`error_message VARCHAR(1000)`；`created_at/updated_at DATETIME`。
+  索引：`uk_document_uuid(document_id)`、`idx_document_uploader_created(user_id, created_at)`、`idx_document_tenant_created(tenant_id, created_at)`、`idx_document_status(status)`。未创建 `(user_id, tenant_id, created_at)` 复合索引。
+- `document_chunk`：`chunk_id BIGINT AUTO_INCREMENT` 主键；`document_pk BIGINT` 外键→`document.document_pk` `ON DELETE CASCADE`；`document_id CHAR(36)`；`chunk_index INT`；`content MEDIUMTEXT`；`char_count INT`；`created_at DATETIME`。约束：`uk_document_chunk_index(document_pk,chunk_index)`、`idx_chunk_document_id(document_id)`。
+- 未引入逻辑删除字段；删除采用物理删除（chunk 级联）。
+
+### 17.3 Java 约定
+- `@TableName` + `@TableId(type=IdType.AUTO)` + `@TableField` 显式映射；时间统一 `LocalDateTime`；`userId/tenantId` 为 `Long`。
+- Entity 仅承载数据，不含文件处理 / Embedding / Qdrant 逻辑；Mapper 继承 `BaseMapper`，由 `@MapperScan("com.draftagent.**.mapper")` 注册。
+
+### 17.4 验证结果
+- 本地 MySQL：`5.7.43-log`；`draft_agent` 库已执行 `document_schema.sql` 与 `document_tenant_shared_v1.sql`。
+- 迁移前检查：`document` 总数 `0`、`user_id IS NULL` 数 `0`、`tenant_id IS NULL` 数 `0`，满足迁移前提；执行后 `SHOW CREATE TABLE document` 确认 `user_id` 为 `NOT NULL`、`tenant_id` 仍可空、索引为 `idx_document_uploader_created(user_id,created_at)` 与 `idx_document_tenant_created(tenant_id,created_at)`。
+- EXPLAIN：企业共享列表（`WHERE tenant_id=? ORDER BY created_at DESC`）使用 `idx_document_tenant_created`（type=ref）；个人列表（`WHERE user_id=? AND tenant_id IS NULL ORDER BY created_at DESC`）使用 `idx_document_uploader_created`（type=ref）。注意：`tenant_id=? OR (tenant_id IS NULL AND user_id=?)` 组合可见性查询在 5.7 为全表扫描（type=ALL），后续 Service 建议拆为两次索引查询或 UNION ALL。
+- 编译：`mvn -pl draft-agent-business -am -DskipTests compile` → BUILD SUCCESS。
+- 回归：`mvn -B test` → **Tests run: 57, Failures: 0, Errors: 0, Skipped: 0**，BUILD SUCCESS。
+
+### 17.5 未完成 / 下一步
+- 未实现 `DocumentService`、`DocumentController`、文件存储、解析分块、Embedding 与 Qdrant 写入/检索。
+- 表仅在本机 `draft_agent` 创建；其他环境需手工执行 `docs/sql/document_schema.sql`（新库）或 `docs/sql/document_tenant_shared_v1.sql`（Batch 3.2 旧结构迁移）。
+- 下一步：实现文档 Service/Controller，再接入解析/分块/Embedding/Qdrant，并复用 `CurrentUser` 做 user/tenant 隔离。
+
+### 17.6 归属与共享规则（Batch 3.2.1）
+- **双模式**：企业共享 + 个人私有。
+- `user_id` **必填**，记录上传者；`tenant_id` **可空**，表示文档共享边界。
+- **企业用户按 tenantId 共享**：`tenant_id` 非空时，同一租户的所有成员均可访问该文档（不同租户严格隔离）。
+- **无租户用户按 userId 私有**：`tenant_id` 为空时，仅上传者本人可访问。
+- **删除 / 重新处理仅限上传者**本人（即使同租户其他成员可读）。
+- 所有身份一律来自服务端 `CurrentUser`，**不接受客户端传入的 `userId` / `tenantId`**。
+- **Qdrant 必须使用相同隔离规则**：向量 payload 需携带 `user_id`、`tenant_id`（及 `document_id`），检索时按同一规则过滤，严禁跨租户/跨用户召回。
+- 实现注意：`tenant_id` 为空时查询须用 `tenant_id IS NULL`（不能用 `= NULL`）；组合可见性查询建议拆为「按 tenant_id」与「按 user_id + tenant_id IS NULL」两次索引查询或 UNION ALL。
