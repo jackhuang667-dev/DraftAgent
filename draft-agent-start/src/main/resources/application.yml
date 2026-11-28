@@ -82,6 +82,12 @@ rag:
     distance: ${QDRANT_DISTANCE:Cosine}
     timeout-ms: ${QDRANT_TIMEOUT_MS:10000}
     initialize-on-startup: ${QDRANT_INIT_ON_STARTUP:false}
+  retrieval:
+    # 向量检索 Top-K：默认 5，硬上限 20；非法值在服务层拒绝，不设置相似度阈值
+    top-k: ${RAG_RETRIEVAL_TOP_K:5}
+    max-top-k: ${RAG_RETRIEVAL_MAX_TOP_K:20}
+    # RAG 参考资料字符预算（仅统计格式化后的 Chunk 引用块及分隔符）
+    max-context-chars: ${RAG_RETRIEVAL_MAX_CONTEXT_CHARS:12000}
 
 logging:
   level:

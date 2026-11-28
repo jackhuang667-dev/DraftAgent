@@ -49,10 +49,14 @@ draft-agent-start
 - 独立 EmbeddingModel：SiliconFlow `BAAI/bge-m3`（1024 维），与 DeepSeek Chat 完全隔离；未配置 Key 时不创建该 Bean。
 - Qdrant Collection 初始化：`draftagent_chunks_v1`（size=1024、Cosine）+ Payload Index（`tenant_id`、`user_id`、`document_id`）。
 - Chunk 向量入库：批量 Embedding（32/批）→ 批量 Upsert 到 Qdrant，Point ID = `chunk_id`，Payload 携带 `document_id/document_pk/chunk_id/chunk_index/user_id/tenant_id`（个人文档 `tenant_id=null` 显式写入）。
+- 向量检索（Batch 3.5.1）：查询 Embedding → Qdrant Top-K（企业 `tenant_id` / 个人 `tenant_id IS NULL AND user_id`），仅返回 Chunk 元数据与原始 score。
+- MySQL 原文回查（Batch 3.5.2）：按 `chunk_id` 一次批量 JOIN `document` / `document_chunk`，复核 READY 与 user/tenant 归属，交叉核对 Qdrant 元数据，并按原始排名返回原文 + score。
+- RAG 问答（Batch 3.5.3）：组装 System/User Prompt（含 Prompt Injection 防护）→ 复用现有 DeepSeek ChatClient 生成回答 → 后端返回真实 Chunk 引用来源；无检索结果时不调用模型；不挂 ChatMemory、不触发 Tools。
+- RAG 上下文预算与引用校验（Batch 3.5.4）：按 Qdrant 排名前缀选择 Chunk，字符预算内不截断、不跳选；校验模型回答中的 `[n]`，仅保留指向实际进入 Prompt 的引用，无效编号移除且不重映射。
 
 > 注意：文档上传在解析分块后会调用 Embedding 并写入 Qdrant。未配置 `EMBEDDING_API_KEY` 或 Qdrant 不可用时，上传会失败（503）并将文档标记为 FAILED；应用本身仍可正常启动。
 
-**尚未实现**：向量写入、RAG 检索、文档列表/下载/删除/重新处理、登录/注册发号、Multi-Agent。
+**尚未实现**：RAG HTTP 问答接口与真实模型端到端验收、文档列表/下载/删除/重新处理、登录/注册发号、Multi-Agent。
 
 ## 快速开始
 
@@ -81,6 +85,10 @@ QDRANT_GRPC_PORT=6334
 QDRANT_COLLECTION=draftagent_chunks_v1
 QDRANT_DIMENSIONS=1024
 QDRANT_INIT_ON_STARTUP=false  # true 时启动时初始化 Collection（失败不阻断启动）
+
+RAG_RETRIEVAL_TOP_K=5         # 向量检索默认 Top-K
+RAG_RETRIEVAL_MAX_TOP_K=20    # 向量检索允许的硬上限
+RAG_RETRIEVAL_MAX_CONTEXT_CHARS=12000  # 进入 Prompt 的参考资料字符预算
 ```
 
 ### 初始化数据库
