@@ -587,3 +587,120 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 - MIME 校验较严格（如部分浏览器对 `.md` 发送 `application/octet-stream` 会被拒绝）。
 - 扫描版 PDF 无文本层 → 明确 FAILED，不支持 OCR。
 - 本地存储为单机磁盘，未做多实例共享存储。
+
+---
+
+## 19. Batch 3.4.2：接入 SiliconFlow EmbeddingModel（已完成，未提交）
+
+> 仅接入独立 EmbeddingModel 与维度校验；**未**接入 Qdrant、**未**写入向量、**未**实现检索/RAG。
+
+### 19.1 选型与配置
+- Provider：SiliconFlow；Base URL `https://api.siliconflow.cn`；API `/v1/embeddings`；模型 `BAAI/bge-m3`；固定 **1024 维**；encoding `float`；后续 Qdrant 距离 Cosine。
+- 新增独立配置 `rag.embedding.*`（环境变量）：`EMBEDDING_API_KEY`、`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_DIMENSIONS`、`connect-timeout-ms=5000`、`read-timeout-ms=30000`。
+- 属性类 `RagEmbeddingProperties`（默认值 + `@Min(1)` 校验 dimensions/超时）。
+- 与 DeepSeek Chat 完全隔离：未修改 `spring.ai.openai.*`、未修改 `AiConfig` 的 ChatModel/ChatClient。
+
+### 19.2 EmbeddingModel 装配
+- 新增 `EmbeddingConfig`，受 `EmbeddingApiKeyPresentCondition`（`rag.embedding.api-key` 非空）约束。
+- 使用独立 `OpenAiApi`（内联构建，不暴露 Bean，避免与 Chat 的 `OpenAiApi` 冲突）：`baseUrl=rag.embedding.base-url`、`apiKey=rag.embedding.api-key`、独立 `RestClient.Builder` + `SimpleClientHttpRequestFactory`（connect/read 超时）。
+- `OpenAiApi` 默认路径为 `/v1/embeddings`（本地 1.0.9 字节码确认）。
+- `new OpenAiEmbeddingModel(api, MetadataMode.EMBED, options)`，`OpenAiEmbeddingOptions.model=BAAI/bge-m3`；**不发送 dimensions 参数**。
+- 无 Key 时不创建 EmbeddingModel Bean，应用可正常启动。
+
+### 19.3 维度校验
+- 新增 `EmbeddingDimensionValidator`（读取 `rag.embedding.dimensions`）：以真实返回向量长度为准，长度不等于 1024 抛 `EmbeddingDimensionMismatchException`；不依赖 `EmbeddingModel.dimensions()`；不截断/补齐；异常不含 API Key。
+
+### 19.4 测试与验证
+- 新增测试：`EmbeddingConfigNoKeyTest`(4)、`EmbeddingConfigWithKeyTest`(1)、`EmbeddingPropertiesValidationTest`(3)、`EmbeddingDimensionValidatorTest`(6)、`EmbeddingSmokeTest`(1，默认跳过)。
+- `mvn -B test` → **Tests run: 88, Failures: 0, Errors: 0, Skipped: 1**，BUILD SUCCESS。
+- `EmbeddingSmokeTest` 仅在设置 `EMBEDDING_API_KEY` 时运行；本次**未配置真实 Key，未执行真实 API 调用**。
+
+### 19.5 未完成 / 下一步
+- 未接入 Qdrant Client / Collection / 向量写入 / 检索（3.4.2 范围外）。
+- 真实 SiliconFlow 调用需在配置 `EMBEDDING_API_KEY` 后运行 `EmbeddingSmokeTest` 验证（断言长度 1024）。
+- 后续：Qdrant `draftagent_chunks_v1`（size=1024, Cosine）与 payload 索引、Chunk 向量写入、带 user/tenant 过滤的检索。
+
+---
+
+## 20. Batch 3.4.3：Qdrant Collection 初始化（已完成，未提交）
+
+> 仅完成 Qdrant Client 接入、Collection 与 Payload Index 初始化；**未**写入向量、**未**写 Chunk Payload、**未**实现检索。
+
+### 20.1 Qdrant Java Client 选型
+- 使用官方 `io.qdrant:client:1.13.0`（与 Spring AI 1.0.9 `spring-ai-qdrant-store` 依赖的客户端版本一致）。
+- 显式补充编译期依赖：`protobuf-java:3.25.1`、`grpc-api:1.65.1`、`guava:32.1.3-jre`（与 Qdrant Client 传递版本一致）。
+- 本地 Qdrant 1.12.4 兼容验证通过（真实临时 Collection 集成测试）。
+
+### 20.2 配置（独立于 Embedding / DeepSeek）
+- `rag.qdrant.host/grpc-port/collection/dimensions/distance/timeout-ms/initialize-on-startup`。
+- 默认：`localhost:6334`、`draftagent_chunks_v1`、1024 维、Cosine、10s；`initialize-on-startup=false`。
+- `RagQdrantProperties` 校验：dimensions/port/timeout > 0，distance 仅 Cosine/Euclid/Dot/Manhattan。
+- `QdrantConfig` 独立创建 `QdrantClient` Bean（gRPC，懒连接；创建时不强制连接 Qdrant）。
+
+### 20.3 初始化与幂等
+- `QdrantCollectionInitializer.initialize()`：
+  1. 不存在 → 创建（size=1024, distance=Cosine）；
+  2. 已存在且维度/距离一致 → 跳过创建；
+  3. 已存在但维度/距离不一致 → 抛 `QdrantCollectionConfigMismatchException`，**不删除/不重建/不覆盖**；
+  4. 幂等创建 Payload Index：`tenant_id`(integer)、`user_id`(integer)、`document_id`(uuid)。
+- 可选启动初始化：`QdrantCollectionStartupRunner` 仅在 `rag.qdrant.initialize-on-startup=true` 时运行；失败仅记录清晰错误，不阻断应用启动。
+- 本组件无删除 Collection 能力（`QdrantCollectionAdmin` 不含 delete）。
+
+### 20.4 正式 Collection 初始化结果（本地）
+- 已通过一次性受控运行初始化 `draftagent_chunks_v1`（非测试构造，未删除任何数据）。
+- REST 只读核验：`vectors.size=1024`、`vectors.distance=Cosine`；`payload_schema` 含 `tenant_id`、`user_id`、`document_id`。
+- 当前 `GET /collections` 仅包含 `draftagent_chunks_v1`；无向量数据。
+
+### 20.5 测试与验证
+- 新增：`QdrantPropertiesTest`(5)、`QdrantCollectionInitializerTest`(5, Mock)、`QdrantCollectionInitializerIntegrationTest`(1, 真实临时 Collection)。
+- `mvn -B test` → **Tests run: 99, Failures: 0, Errors: 0, Skipped: 1**，BUILD SUCCESS。
+- 集成测试使用独立临时 Collection 并在结束后仅删除自身；未触碰正式 Collection。
+
+### 20.6 未完成 / 下一步
+- 未实现向量写入、Chunk→Qdrant 映射、RAG 检索、文档重新处理（3.4.4）。
+- 正式 Collection 未自动在应用启动时初始化（`initialize-on-startup=false`），需要时显式开启或调用初始化器。
+- `document_id` 采用 `uuid` 索引；写入时必须保证 payload 中 `document_id` 为合法 UUID。
+- 个人文档未来写入时必须显式保存 `tenant_id=null`（不能省略字段）。
+
+---
+
+## 21. Batch 3.4.4：Chunk Embedding 与 Qdrant 向量入库（已完成，未提交）
+
+> 打通：MySQL `document_chunk` → 批量 Embedding → Qdrant `draftagent_chunks_v1`。**未**实现 RAG 检索、重新处理。
+
+### 21.1 新增/修改文件
+- 新增（business）：`document/DocumentVectorizer.java`（向量化端口）、`document/DocumentVectorizationException.java`。
+- 新增（ai，`ai/rag/vector`）：`DocumentEmbeddingService`（批量 Embedding + 数量/维度校验）、`QdrantChunkVectorService`（Point 构建、批量 Upsert、按 document_id 删除）、`DocumentVectorizationService`（协调 + 32 条分批 + 失败补偿，实现 business 端口）。
+- 修改：`DocumentService`（新流程：分块落库 → 读取含 chunk_id → 向量化 → 最后 READY）、`DocumentTransactionService`（`saveChunks`/`listChunks`/`markReady` 替代 `markReadyWithChunks`）。
+- 修改测试：`DocumentServiceUnitTest`（新流程 + 向量化失败/补偿）、`DocumentUploadMockMvcTest`（Mock `DocumentVectorizer`，不调用真实 Embedding/Qdrant）。
+
+### 21.2 文档处理状态流转
+```
+校验 → 落盘 → PENDING → PROCESSING
+→ 解析 → 分块写入 MySQL（仍 PROCESSING）
+→ 从 MySQL 读取含 chunk_id 的分块
+→ [事务外] 批量 Embedding（32/批）→ 校验 1024 维
+→ [事务外] Qdrant 批量 Upsert（wait=true）
+→ READY（仅向量写入成功后）
+```
+- 解析/Embedding/Qdrant 调用均不在 MySQL 事务内。
+- 任一步失败：`FAILED` + 删除 MySQL 分块 + 删除本地文件；若已发生 Upsert，按 `document_id` 做有界补偿删除。
+
+### 21.3 Qdrant Point / Payload
+- Point ID = `document_chunk.chunk_id`（稳定；重复 Upsert 覆盖同一 Point）。
+- Payload（不含 Chunk 全文）：`document_id`(string)、`document_pk`(int)、`chunk_id`(int)、`chunk_index`(int)、`user_id`(int)、`tenant_id`(int 或显式 null)。
+- 个人文档使用 `ValueFactory.nullValue()` 显式写入 JSON null（真实 Qdrant 集成测试已验证字段存在且为 null）。
+- 删除向量一律按 `document_id` 过滤（`ConditionFactory.matchKeyword`），不删除 Collection、不做无过滤删除。
+
+### 21.4 测试结果
+- 新增：`DocumentEmbeddingServiceTest`(5)、`QdrantChunkVectorServiceTest`(7)、`DocumentVectorizationServiceTest`(7)、`QdrantChunkVectorServiceIntegrationTest`(1，真实 Qdrant 临时 Collection)。
+- `DocumentServiceUnitTest`：6 → 8（新增向量化失败、READY 失败后补偿）。
+- `mvn -B test` → **Tests run: 121, Failures: 0, Errors: 0, Skipped: 1**，BUILD SUCCESS。
+- 真实 Embedding API 未调用（无 `EMBEDDING_API_KEY`），测试全部使用 Mock EmbeddingModel。
+
+### 21.5 行为变化 / 风险
+- **上传文档现在需要 EMBEDDING_API_KEY 与可用 Qdrant**：缺失时上传会 FAILED 并返回 503（应用仍可正常启动）。
+- 向量维度假定 1024；若更换 Embedding 模型/维度，必须同步新建 Qdrant Collection。
+- 正式 Collection `draftagent_chunks_v1` 仍为空；本批测试仅使用临时 Collection。
+- 未实现 RAG 检索、文档重新处理、失败任务重试接口。
+- Qdrant Upsert 部分批次失败时依赖按 `document_id` 的补偿删除；补偿失败会在异常中保留 document_id 与两侧错误摘要。

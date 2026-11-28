@@ -3,10 +3,13 @@ package com.draftagent.document;
 import com.draftagent.business.document.DocumentContentParser;
 import com.draftagent.business.document.DocumentFileType;
 import com.draftagent.business.document.DocumentParseException;
+import com.draftagent.business.document.DocumentVectorizationException;
+import com.draftagent.business.document.DocumentVectorizer;
 import com.draftagent.business.document.storage.DocumentStorage;
 import com.draftagent.business.document.storage.StoredDocumentFile;
 import com.draftagent.business.dto.DocumentUploadResponse;
 import com.draftagent.business.entity.Document;
+import com.draftagent.business.entity.DocumentChunk;
 import com.draftagent.business.service.DocumentService;
 import com.draftagent.business.service.DocumentTransactionService;
 import com.draftagent.common.core.exception.ServiceException;
@@ -19,11 +22,13 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -37,7 +42,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link DocumentService} 单元测试（Mockito，不连接数据库、不解析真实文件）。
+ * {@link DocumentService} 单元测试（Mockito，不连接数据库、不解析真实文件、不调用真实 Embedding/Qdrant）。
  */
 class DocumentServiceUnitTest {
 
@@ -49,6 +54,8 @@ class DocumentServiceUnitTest {
 
     private DocumentTransactionService transactionService;
 
+    private DocumentVectorizer documentVectorizer;
+
     private CurrentUserProvider currentUserProvider;
 
     private DocumentService documentService;
@@ -58,9 +65,10 @@ class DocumentServiceUnitTest {
         this.storage = mock(DocumentStorage.class);
         this.parser = mock(DocumentContentParser.class);
         this.transactionService = mock(DocumentTransactionService.class);
+        this.documentVectorizer = mock(DocumentVectorizer.class);
         this.currentUserProvider = mock(CurrentUserProvider.class);
         this.documentService = new DocumentService(this.storage, this.parser, this.transactionService,
-                this.currentUserProvider, 20L * 1024L * 1024L);
+                this.documentVectorizer, this.currentUserProvider, 20L * 1024L * 1024L);
     }
 
     @Test
@@ -71,7 +79,7 @@ class DocumentServiceUnitTest {
                 () -> this.documentService.upload(txtFile("hello.txt", "hello world")), ServiceException.class);
 
         assertThat(ex.getCode()).isEqualTo(401);
-        verifyNoInteractions(this.storage, this.parser, this.transactionService);
+        verifyNoInteractions(this.storage, this.parser, this.transactionService, this.documentVectorizer);
     }
 
     @Test
@@ -86,7 +94,7 @@ class DocumentServiceUnitTest {
     }
 
     @Test
-    void validUploadReturnsReadyAndPersistsChunks() {
+    void validUploadReturnsReadyAfterVectorization() {
         StoredDocumentFile stored = storedFile();
         when(this.currentUserProvider.getCurrentUser()).thenReturn(new CurrentUser(1L, null));
         when(this.storage.store(any(), eq("txt"))).thenReturn(stored);
@@ -94,12 +102,16 @@ class DocumentServiceUnitTest {
         when(this.transactionService.markProcessing(DOCUMENT_PK)).thenReturn(true);
         when(this.parser.extractChunks(any(), eq(DocumentFileType.TXT)))
                 .thenReturn(List.of("chunk one", "chunk two"));
+        mockPersistedChunks(2);
+        when(this.documentVectorizer.vectorize(any(Document.class), anyList())).thenReturn(2);
 
         DocumentUploadResponse response = this.documentService.upload(txtFile("a.txt", "body"));
 
         assertThat(response.getStatus()).isEqualTo(Document.STATUS_READY);
         assertThat(response.getChunkCount()).isEqualTo(2);
-        verify(this.transactionService).markReadyWithChunks(eq(DOCUMENT_PK), anyList());
+        verify(this.transactionService).saveChunks(anyList());
+        verify(this.documentVectorizer).vectorize(any(Document.class), anyList());
+        verify(this.transactionService).markReady(eq(DOCUMENT_PK), eq(2));
         verify(this.storage, never()).delete(anyString());
     }
 
@@ -111,6 +123,8 @@ class DocumentServiceUnitTest {
         mockInsertPending();
         when(this.transactionService.markProcessing(DOCUMENT_PK)).thenReturn(true);
         when(this.parser.extractChunks(any(), eq(DocumentFileType.TXT))).thenReturn(List.of("chunk"));
+        mockPersistedChunks(1);
+        when(this.documentVectorizer.vectorize(any(Document.class), anyList())).thenReturn(1);
 
         MockMultipartFile file = new MockMultipartFile("file", "../../etc/upload.txt", "text/plain",
                 "content".getBytes(StandardCharsets.UTF_8));
@@ -147,13 +161,56 @@ class DocumentServiceUnitTest {
         mockInsertPending();
         when(this.transactionService.markProcessing(DOCUMENT_PK)).thenReturn(true);
         when(this.parser.extractChunks(any(), eq(DocumentFileType.TXT))).thenReturn(List.of("chunk"));
-        doThrow(new RuntimeException("db down"))
-                .when(this.transactionService).markReadyWithChunks(eq(DOCUMENT_PK), anyList());
+        doThrow(new RuntimeException("db down")).when(this.transactionService).saveChunks(anyList());
 
         ServiceException ex = catchThrowableOfType(
                 () -> this.documentService.upload(txtFile("a.txt", "body")), ServiceException.class);
 
         assertThat(ex.getCode()).isEqualTo(503);
+        verify(this.transactionService).markFailed(eq(DOCUMENT_PK), anyString());
+        verify(this.transactionService, never()).markReady(any(), anyInt());
+        verify(this.documentVectorizer, never()).vectorize(any(), anyList());
+        verify(this.storage).delete(stored.getRelativePath());
+    }
+
+    @Test
+    void vectorizationFailureMarksFailedAndDeletesFile() {
+        StoredDocumentFile stored = storedFile();
+        when(this.currentUserProvider.getCurrentUser()).thenReturn(new CurrentUser(1L, null));
+        when(this.storage.store(any(), eq("txt"))).thenReturn(stored);
+        mockInsertPending();
+        when(this.transactionService.markProcessing(DOCUMENT_PK)).thenReturn(true);
+        when(this.parser.extractChunks(any(), eq(DocumentFileType.TXT))).thenReturn(List.of("chunk"));
+        mockPersistedChunks(1);
+        when(this.documentVectorizer.vectorize(any(Document.class), anyList()))
+                .thenThrow(new DocumentVectorizationException("向量化失败"));
+
+        ServiceException ex = catchThrowableOfType(
+                () -> this.documentService.upload(txtFile("a.txt", "body")), ServiceException.class);
+
+        assertThat(ex.getCode()).isEqualTo(503);
+        verify(this.transactionService).markFailed(eq(DOCUMENT_PK), contains("向量化失败"));
+        verify(this.transactionService, never()).markReady(any(), anyInt());
+        verify(this.storage).delete(stored.getRelativePath());
+    }
+
+    @Test
+    void markReadyFailureAfterVectorizationDeletesVectors() {
+        StoredDocumentFile stored = storedFile();
+        when(this.currentUserProvider.getCurrentUser()).thenReturn(new CurrentUser(1L, null));
+        when(this.storage.store(any(), eq("txt"))).thenReturn(stored);
+        mockInsertPending();
+        when(this.transactionService.markProcessing(DOCUMENT_PK)).thenReturn(true);
+        when(this.parser.extractChunks(any(), eq(DocumentFileType.TXT))).thenReturn(List.of("chunk"));
+        mockPersistedChunks(1);
+        when(this.documentVectorizer.vectorize(any(Document.class), anyList())).thenReturn(1);
+        doThrow(new ServiceException(409, "状态冲突")).when(this.transactionService).markReady(eq(DOCUMENT_PK), anyInt());
+
+        ServiceException ex = catchThrowableOfType(
+                () -> this.documentService.upload(txtFile("a.txt", "body")), ServiceException.class);
+
+        assertThat(ex.getCode()).isEqualTo(409);
+        verify(this.documentVectorizer).deleteByDocumentId(anyString());
         verify(this.transactionService).markFailed(eq(DOCUMENT_PK), anyString());
         verify(this.storage).delete(stored.getRelativePath());
     }
@@ -164,6 +221,19 @@ class DocumentServiceUnitTest {
             document.setDocumentPk(DOCUMENT_PK);
             return null;
         }).when(this.transactionService).insertPending(any(Document.class));
+    }
+
+    private void mockPersistedChunks(int count) {
+        List<DocumentChunk> persisted = new ArrayList<>(count);
+        for (int index = 0; index < count; index++) {
+            DocumentChunk chunk = new DocumentChunk();
+            chunk.setChunkId(900L + index);
+            chunk.setDocumentPk(DOCUMENT_PK);
+            chunk.setChunkIndex(index);
+            chunk.setContent("chunk " + index);
+            persisted.add(chunk);
+        }
+        when(this.transactionService.listChunks(DOCUMENT_PK)).thenReturn(persisted);
     }
 
     private static StoredDocumentFile storedFile() {

@@ -3,6 +3,8 @@ package com.draftagent.business.service;
 import com.draftagent.business.document.DocumentContentParser;
 import com.draftagent.business.document.DocumentFileType;
 import com.draftagent.business.document.DocumentParseException;
+import com.draftagent.business.document.DocumentVectorizationException;
+import com.draftagent.business.document.DocumentVectorizer;
 import com.draftagent.business.document.storage.DocumentStorage;
 import com.draftagent.business.document.storage.StoredDocumentFile;
 import com.draftagent.business.dto.DocumentUploadResponse;
@@ -62,6 +64,8 @@ public class DocumentService {
 
     private final DocumentTransactionService documentTransactionService;
 
+    private final DocumentVectorizer documentVectorizer;
+
     private final CurrentUserProvider currentUserProvider;
 
     private final long maxFileSizeBytes;
@@ -69,11 +73,13 @@ public class DocumentService {
     public DocumentService(DocumentStorage documentStorage,
                            DocumentContentParser documentContentParser,
                            DocumentTransactionService documentTransactionService,
+                           DocumentVectorizer documentVectorizer,
                            CurrentUserProvider currentUserProvider,
                            @Value("${rag.document.max-file-size-bytes:20971520}") long maxFileSizeBytes) {
         this.documentStorage = documentStorage;
         this.documentContentParser = documentContentParser;
         this.documentTransactionService = documentTransactionService;
+        this.documentVectorizer = documentVectorizer;
         this.currentUserProvider = currentUserProvider;
         this.maxFileSizeBytes = maxFileSizeBytes;
     }
@@ -89,10 +95,12 @@ public class DocumentService {
         ValidatedUpload validated = validate(file);
         StoredDocumentFile stored = this.documentStorage.store(file, validated.type.getExtension());
 
+        Document document = null;
         Long documentPk = null;
         boolean ready = false;
+        boolean vectorized = false;
         try {
-            Document document = buildDocument(validated, stored, userId, tenantId);
+            document = buildDocument(validated, stored, userId, tenantId);
             try {
                 this.documentTransactionService.insertPending(document);
             }
@@ -110,16 +118,47 @@ public class DocumentService {
             List<String> contents = parse(stored, validated.type);
             List<DocumentChunk> chunks = buildChunks(document, contents, LocalDateTime.now());
 
-            this.documentTransactionService.markReadyWithChunks(documentPk, chunks);
+            // 1) 分块先落库，文档状态仍为 PROCESSING
+            this.documentTransactionService.saveChunks(chunks);
+            List<DocumentChunk> persistedChunks = this.documentTransactionService.listChunks(documentPk);
+            if (persistedChunks.isEmpty() || persistedChunks.size() != chunks.size()) {
+                throw new DocumentVectorizationException(
+                        "文档分块持久化异常: document_id=" + document.getDocumentId());
+            }
+
+            // 2) 事务外：批量 Embedding + Qdrant Upsert
+            int upserted = this.documentVectorizer.vectorize(document, persistedChunks);
+            vectorized = true;
+            if (upserted != persistedChunks.size()) {
+                throw new DocumentVectorizationException(
+                        "向量写入数量不一致: document_id=" + document.getDocumentId()
+                                + ", expected=" + persistedChunks.size() + ", actual=" + upserted);
+            }
+
+            // 3) 向量写入成功后才标记 READY
+            this.documentTransactionService.markReady(documentPk, persistedChunks.size());
             ready = true;
             return new DocumentUploadResponse(document.getDocumentId(), document.getFilename(),
-                    document.getMimeType(), document.getFileSize(), Document.STATUS_READY, chunks.size());
+                    document.getMimeType(), document.getFileSize(), Document.STATUS_READY,
+                    persistedChunks.size());
         }
         catch (DocumentParseException e) {
             safeMarkFailed(documentPk, e.getMessage());
             throw new ServiceException(STATUS_UNPROCESSABLE, safeParseMessage(e));
         }
+        catch (DocumentVectorizationException e) {
+            // 向量实现侧已尽力按 document_id 补偿；此处仅处理“向量化成功后数量不一致”等场景
+            if (vectorized && document != null) {
+                safeDeleteVectors(document.getDocumentId());
+            }
+            safeMarkFailed(documentPk, e.getMessage());
+            log.warn("文档向量化失败: documentId={}", document == null ? null : document.getDocumentId());
+            throw new ServiceException(STATUS_SERVICE_UNAVAILABLE, "文档向量化失败，请稍后重试", e);
+        }
         catch (RuntimeException e) {
+            if (vectorized && document != null) {
+                safeDeleteVectors(document.getDocumentId());
+            }
             safeMarkFailed(documentPk, e.getMessage());
             if (e instanceof ServiceException serviceException) {
                 throw serviceException;
@@ -131,6 +170,15 @@ public class DocumentService {
             if (!ready) {
                 this.documentStorage.delete(stored.getRelativePath());
             }
+        }
+    }
+
+    private void safeDeleteVectors(String documentId) {
+        try {
+            this.documentVectorizer.deleteByDocumentId(documentId);
+        }
+        catch (RuntimeException e) {
+            log.error("按 document_id 补偿删除向量失败: documentId={}", documentId);
         }
     }
 

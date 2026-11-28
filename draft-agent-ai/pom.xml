@@ -38,5 +38,24 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-pdf-document-reader</artifactId>
         </dependency>
+        <!-- 官方 Qdrant Java Client（gRPC）：版本与 Spring AI 1.0.9 的 qdrant-store 保持一致 -->
+        <dependency>
+            <groupId>io.qdrant</groupId>
+            <artifactId>client</artifactId>
+        </dependency>
+        <!-- 生成的 protobuf 类需要编译期 protobuf-java（与 gRPC 传递版本一致） -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+        </dependency>
+        <!-- Qdrant Client 公共 API 返回 ListenableFuture / 引用 ManagedChannel，需编译期依赖 -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+        </dependency>
     </dependencies>
 </project>

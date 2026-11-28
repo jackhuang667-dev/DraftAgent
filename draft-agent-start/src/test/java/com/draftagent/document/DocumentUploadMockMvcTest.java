@@ -2,6 +2,7 @@ package com.draftagent.document;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.draftagent.DraftAgentApplication;
+import com.draftagent.business.document.DocumentVectorizer;
 import com.draftagent.business.entity.Document;
 import com.draftagent.business.entity.DocumentChunk;
 import com.draftagent.business.mapper.DocumentChunkMapper;
@@ -16,10 +17,12 @@ import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -37,6 +40,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -69,7 +75,16 @@ class DocumentUploadMockMvcTest {
     @Autowired
     private DocumentChunkMapper documentChunkMapper;
 
+    @MockBean
+    private DocumentVectorizer documentVectorizer;
+
     private final List<Long> createdDocumentPks = new ArrayList<>();
+
+    @BeforeEach
+    void stubVectorizer() {
+        when(this.documentVectorizer.vectorize(any(Document.class), anyList()))
+                .thenAnswer(invocation -> ((List<?>) invocation.getArgument(1)).size());
+    }
 
     @AfterEach
     void cleanupDatabase() {
