@@ -24,6 +24,12 @@ public class Draft {
 
     private String status;
 
+    @TableField("user_id")
+    private Long userId;
+
+    @TableField("tenant_id")
+    private Long tenantId;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 
@@ -60,6 +66,22 @@ public class Draft {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
+    }
+
+    public Long getTenantId() {
+        return tenantId;
+    }
+
+    public void setTenantId(Long tenantId) {
+        this.tenantId = tenantId;
     }
 
     public LocalDateTime getCreatedAt() {

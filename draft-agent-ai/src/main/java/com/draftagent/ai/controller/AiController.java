@@ -25,7 +25,7 @@ public class AiController {
 
     @PostMapping("/chat")
     public R<ChatResponse> chat(@Valid @RequestBody ChatRequest request) {
-        String reply = aiService.chat(request.getMessage());
+        String reply = aiService.chat(request.getConversationId(), request.getRequestId(), request.getMessage());
         return R.ok(new ChatResponse(reply));
     }
 }

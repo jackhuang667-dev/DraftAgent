@@ -359,3 +359,140 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 - `createDraft` 为写工具，匿名调用即可创建草案；当前配置**仅适合本地开发测试，不可直接暴露到公网**。
 - 上线前必须接入认证/授权、限流与审计；写接口与写工具需单独授权。
 - `DB_PASSWORD`、`DEEPSEEK_API_KEY` 仅存在于本地运行环境，不进入 Git；文档与源码均不含真实凭据。
+
+---
+
+## 14. Tool Calling 源码学习进度（交接记录，2026-11-24）
+
+> 本节记录 Spring AI 1.0.9 Tool Calling 内部执行原理的调试进展与明日任务；不含任何真实凭据；不修改业务代码。
+
+### 14.1 主题与已掌握概念
+学习主题：Spring AI Tool Calling 内部执行原理。已理解：
+- AiService：项目业务服务，入口 `AiService#chat(String)`（`draft-agent-ai/.../service/AiService.java:38`）。
+- ChatClient：Spring AI 高级调用入口；`AiService` 中 `.tools(draftTools).call().content()`（AiService.java:46-48）。
+- ChatModel：模型调用抽象（当前为 `OpenAiChatModel`）。
+- ToolDefinition：工具名称、描述、参数 Schema。
+- DeepSeek：根据消息与工具定义决定是否调用工具。
+- ToolCall：模型返回的工具调用请求（位于 `AssistantMessage#getToolCalls()`）。
+- ChatResponse：Spring AI 响应封装（`getResult()` / `getResults()`）。
+- ToolCallingManager：协调工具调用（实现类 `DefaultToolCallingManager`）。
+- ToolCallback：工具执行统一接口（实现类 `MethodToolCallback`）。
+
+### 14.2 已完成的真实调试路径
+1. 定位 `AiService.chat` 中的 `.call()`。
+2. 进入 `DefaultChatClient$DefaultCallResponseSpec#content()`（反编译确认存在 `content()` 与 `chatResponse()`）。
+3. 观察到真实 `ChatResponse` 对象。
+4. 定位并在 `DefaultToolCallingManager#executeToolCalls(Prompt, ChatResponse)` 命中过断点。
+
+### 14.3 真实测试结果（已完成）
+- DeepSeek 调用 `createDraft` 成功。
+- Java 业务逻辑执行成功，MySQL 已保存草案。
+- 最近一次测试草案 **ID = 6**（用户提供；本轮未再次创建测试草案）。
+
+### 14.4 观察到的现象与初步分析
+- 在 `content()` 中观察到的 `ChatResponse`：`toolCalls=[]`、`textContent="草案已创建成功"`、`finishReason=STOP`。
+  该对象是**工具循环结束后的最终响应**，因此不含 tool calls，属正常。
+- 在 `executeToolCalls()` 断点处观察到 `chatResponse.toolCalls` 为空，与“进入该方法应代表首轮响应含工具调用”的预期不符，**原因待明日用调用栈确认**（可能是观察了错误的 ChatResponse 变量，或命中的是递归/流式路径）。
+- **访问方式纠正**：`ChatResponse` 本身没有 `getToolCalls()`；工具调用位于
+  `chatResponse.getResult().getOutput().getToolCalls()`（即 `AssistantMessage#getToolCalls()`）。
+- **反编译确认的调用链**（Spring AI 1.0.9）：
+  `OpenAiChatModel#call(Prompt)` → `OpenAiChatModel#internalCall(Prompt, ChatResponse)` →
+  `toolCallingManager.executeToolCalls(prompt, chatResponse)`；
+  若 `ToolExecutionResult#returnDirect()` 为 false，则基于 `ToolExecutionResult#conversationHistory()` 递归
+  `internalCall(...)` 发起下一次模型调用。**工具循环在 ChatModel 内部完成**，因此 `ChatClient.content()` 只能看到最终响应。
+
+### 14.5 明日任务（按顺序）
+1. 阅读 `DefaultToolCallingManager#executeToolCalls()` 完整实现。
+2. 用 IDEA Debug 调用栈确认调用者（预期 `OpenAiChatModel#internalCall`，可在 `OpenAiChatModel#call` 同时下断点）。
+3. 定位第一次 `ChatModel.call()` 的返回位置（`OpenAiApi` 响应转换为 `ChatResponse` 处）。
+4. 捕获包含 `createDraft` 的第一次 `ChatResponse`：在 `executeToolCalls` 入参处求值 `chatResponse.getResult().getOutput().getToolCalls()`。
+5. 观察 `ToolCall` 的 `name`、`id`、`arguments`（`AssistantMessage.ToolCall`）。
+6. 追踪 `ToolCallbackResolver#resolve(String)` 如何找到对应 `ToolCallback`。
+7. 进入 `MethodToolCallback#call(String)`，观察 JSON 参数如何转换为 Java 参数并反射调用 `DraftTools#createDraft`。
+8. 观察工具执行结果（`ToolExecutionResult`）如何回填 `conversationHistory` 并返回给模型生成最终文本。
+
+建议断点：`OpenAiChatModel#call(Prompt)`、`OpenAiChatModel#internalCall(Prompt, ChatResponse)`、
+`DefaultToolCallingManager#executeToolCalls(Prompt, ChatResponse)`、`ToolCallbackResolver#resolve(String)`、
+`MethodToolCallback#call(String)`。
+
+### 14.6 关键类/方法速查（Spring AI 1.0.9，均已核实存在）
+- `com.draftagent.ai.service.AiService#chat(String)`
+- `org.springframework.ai.chat.client.DefaultChatClient$DefaultCallResponseSpec#content()` / `#chatResponse()`
+- `org.springframework.ai.chat.model.ChatResponse#getResult()` / `#getResults()`
+- `org.springframework.ai.chat.messages.AssistantMessage#getToolCalls()`
+- `org.springframework.ai.openai.OpenAiChatModel#call(Prompt)` / `#internalCall(Prompt, ChatResponse)`
+- `org.springframework.ai.model.tool.DefaultToolCallingManager#executeToolCalls(Prompt, ChatResponse)`
+- `org.springframework.ai.model.tool.ToolExecutionResult#returnDirect()` / `#conversationHistory()`
+- `org.springframework.ai.tool.resolution.ToolCallbackResolver#resolve(String)`
+- `org.springframework.ai.tool.method.MethodToolCallback#call(String)` / `#call(String, ToolContext)`
+- 项目工具：`com.draftagent.ai.tool.DraftTools#createDraft(String,String)`、`#queryDraftStatus(Long)`
+
+### 14.7 当前工作区提示（交接）
+- HEAD：`50be8d7`（`feat(draft): add MySQL draft persistence and Spring AI tools`）。
+- 交接时存在未提交改动（**勿丢失**，未 commit/push）：
+  - `M draft-agent-common/.../exception/GlobalExceptionHandler.java`（新增 400/415 异常映射）。
+  - `?? draft-agent-start/src/test/java/com/draftagent/exception/GlobalExceptionHandlerMockMvcTest.java`（6 个 MockMvc 测试，已通过）。
+  - `M docs/http/test.http`（用户新增“断点调试测试”请求）。
+
+### 14.8 约束（明日继续）
+- 优先只读/断点调试；**不重复创建测试草案**（如确需新建，先与用户确认）。
+- 不输出真实 API Key、数据库密码等敏感信息；不修改业务代码；不提交/推送 Git。
+
+---
+
+## 15. 增量进度（Batch 2.1 – 2.6，工作区实现，未提交）
+
+> 本节记录工作区新增/修改的落地情况；均未 commit/push。真实 DeepSeek 端到端验证尚未执行。
+
+- **Batch 1 / 2.4.1-early**：JDBC ChatMemory（`spring-ai-starter-model-chat-memory-repository-jdbc`，`MessageWindowChatMemory` maxMessages=20，`initialize-schema=never`），`docs/sql/spring_ai_chat_memory.sql`。
+- **Batch 2.1-2.2**：`conversation` / `conversation_message` 业务表 DDL、Entity、Mapper（`docs/sql/conversation_schema.sql`）。
+- **Batch 2.3**：`ConversationService`（T1 beginTurn / T2 completeTurn / T3 failTurn，事务内 `last_message_seq` 原子递增）。
+- **Batch 2.4.1**：`agent_tool_execution` DDL/Entity/Mapper；**Batch 2.4.2**：`ToolExecutionService`（事务外幂等编排）+ `ToolExecutionTransactionService`（单事务：EXECUTING→DraftService.createDraft→SUCCESS，result_ref=draftId），`UNIQUE(tool_name, idempotency_key)`。
+- **Batch 2.4.1（ChatMemory 手动化）**：移除 `MessageChatMemoryAdvisor`，改由 `AiService` 手动 `chatMemory.get/add`。
+- **Batch 2.5**：`ChatRequest` 增 `requestId`；`AiService` 会话级进程内串行锁 + `beginTurn → ChatClient(tools + toolContext{requestId,conversationPk,turnId}) → ChatMemory → completeTurn`，异常时 best-effort `failTurn`；`DraftTools.createDraft` 接收 `ToolContext` 并委托 `ToolExecutionService`。
+- **Batch 2.6（本次）**：
+  - `AiConfig` 自定义 `ToolCallingManager`：`DefaultToolExecutionExceptionProcessor` 配置 `alwaysThrow=true` + `rethrowExceptions=[ServiceException]`，使**业务冲突原样抛出**（最终 HTTP 409），其他工具异常抛 `ToolExecutionException`。
+  - `AiService` 捕获 `ToolExecutionException` → 脱敏 `ServiceException(502)`；业务 `ServiceException` 原样上抛。
+  - `ToolExecutionService` 幂等复用新增 **`conversation_pk` 校验**：同 requestId 不同会话 → 409。
+  - 新增测试：`ToolExceptionPropagationTest`（处理器原样复抛 409 + HTTP 409）、`ToolExecutionServiceMySqlIntegrationTest#sameRequestDifferentConversationIsConflict`。
+
+**已知限制**：会话锁仅单 JVM；`SPRING_AI_CHAT_MEMORY` 与 `conversation` 业务表非跨存储原子事务；HTTP 请求整体不幂等（仅 createDraft 工具按 requestId 幂等）；真实 DeepSeek 端到端待人工执行。
+
+---
+
+## 16. 最新进度：Batch 2.7（JWT 认证与数据权限隔离，工作区实现，未提交）
+
+> **新窗口衔接请优先阅读本节。** 第 1–14 节为历史内容，与当前代码已不完全一致；本节反映当前工作区真实状态。HEAD 仍为 `50be8d7`，大量改动尚未 commit/push。
+
+### 16.1 当前 Git / 工作区（未提交、未 commit/push）
+- 分支 `main`，HEAD `50be8d7`。
+- 已修改（tracked）：`pom.xml`、`draft-agent-security/pom.xml`、`application.yml`、`SecurityConfig.java`、`DraftController.java`、`Draft.java`、`DraftService.java`、`AiService.java`、`DraftTools.java`、`AiConfig.java`、`ChatRequest.java`、`AiController.java`、`GlobalExceptionHandler.java`、`docs/http/test.http`、`PROJECT_STATUS.md`。
+- 未跟踪（新增）：`draft-agent-common/.../security/`、`draft-agent-security/.../{jwt,user,web}/`、business 的 `Conversation/ConversationMessage/AgentToolExecution` 实体与 Mapper、`ConversationService`、`ToolExecutionService`、`ToolExecutionTransactionService`、`TurnContext`、`docs/sql/*.sql`、`draft-agent-start/src/test/` 全部测试。
+- 约束：禁止 reset/restore/clean/commit/push；不得覆盖既有未提交文件。
+
+### 16.2 Batch 2.7 内容（认证与隔离）
+- 依赖：`io.jsonwebtoken:jjwt-api/impl/jackson:0.12.6`（security 模块，版本在根 `pom.xml` 的 `<jjwt.version>`）。
+- 配置：`jwt.secret: ${JWT_SECRET:}`（`application.yml`）。
+- 新增安全组件：`JwtService`（HS256 签发/校验，UTF-8 字节≥32 校验；未配置时进程内随机密钥并告警）、`JwtAuthenticationFilter`（Bearer → `CurrentUser` 写入 SecurityContext）、`RestAuthenticationEntryPoint`（401 JSON）、`RestAccessDeniedHandler`（403 JSON）、`SecurityCurrentUserProvider`；common 新增 `CurrentUser`、`CurrentUserProvider`。
+- `SecurityConfig`：无状态（STATELESS），禁用 csrf/httpBasic/formLogin/logout；`/health,/error` permitAll；`/ai/**`、`/drafts/**` authenticated；其余 `anyRequest().permitAll()`。
+- 身份链路：`CurrentUserProvider`（读 SecurityContext）→ `AiService` 取 `userId/tenantId` → `ConversationService.beginTurn(cid,msg,userId,tenantId)`；并写入 `ToolContext{requestId,conversationPk,turnId,userId,tenantId}`（模型无法覆盖身份）。
+- 会话隔离：创建时绑定归属；继续对话 `beginTurn` 在读取 ChatMemory 之前校验归属，不符返回 403。
+- 草案隔离：`Draft` 增 `user_id/tenant_id`；`DraftService.createDraft(...,userId,tenantId)` 绑定归属；`queryDraftStatus(...)` 归属不符返回 403；`DraftController` 使用当前用户；工具侧 `DraftTools` 从 ToolContext 取身份；幂等复用额外校验 `conversation_pk` 与草案归属。
+- DDL：`docs/sql/draft_user_tenant.sql`（`draft` 增可空 `user_id/tenant_id` + `idx_draft_user/idx_draft_tenant`）**已在本地库执行一次**（未删除数据）。历史 `user_id IS NULL` 草案对已认证用户返回 403，如需访问需回填归属。
+
+### 16.3 测试与安全审计
+- `mvn -B test`：**Tests run: 45, Failures: 0, Errors: 0, Skipped: 0**（含真实 MySQL 的 ChatMemory/Conversation/ToolExecution/DataIsolation 测试）。
+- 真实路径匹配（审计结论）：`/draft-agent/ai/chat` 命中 `/ai/**`；`/draft-agent/drafts` 与 `/draft-agent/drafts/{id}/status` 命中 `/drafts/**`；均 authenticated。**未发现认证绕过**。
+- 待修复 Medium：①`anyRequest().permitAll()` 建议改 `denyAll()` 或显式 allowlist；②非 dev profile 缺 `JWT_SECRET` 应 fail-fast；③未校验 `iss/aud`；④无 token 吊销/刷新。
+
+### 16.4 当前数据库表（均已存在）
+`draft`（含 `user_id/tenant_id`）、`conversation`、`conversation_message`、`spring_ai_chat_memory`、`agent_tool_execution`。
+
+### 16.5 本地环境 / 构建命令
+- mvn 不在 PATH，用 IDEA 内置 Maven：
+  `$env:JAVA_HOME="C:\Users\huanglongchen\.jdks\ms-17.0.19"; $env:PATH="$env:JAVA_HOME\bin;$env:PATH"; & "C:\Program Files\JetBrains\IntelliJ IDEA 2023.2\plugins\maven\lib\maven3\bin\mvn.cmd" -B test`
+- MySQL 5.7.43 / 库 `draft_agent`；`DB_USERNAME`（默认 root）/`DB_PASSWORD`/`JWT_SECRET`/`DEEPSEEK_API_KEY` 全部走环境变量，禁止写入仓库。
+
+### 16.6 已知限制 / 下一步
+- 会话锁仅单 JVM；`SPRING_AI_CHAT_MEMORY` 与业务表非跨存储原子事务；HTTP 请求整体不幂等（仅 createDraft 按 requestId 幂等）；无登录/注册，JWT 由受信任签发方生成（未暴露 HTTP 发号接口）。
+- 建议下一步：先完成 16.3 的 4 项安全加固，再进入 RAG（RAG 必须沿用 `CurrentUser` 做 user/tenant 过滤）。

@@ -26,3 +26,100 @@ Content-Type: application/json
 {
   "message": "请帮我创建一份草案。标题：Tool Calling真实验证-B8K2。内容：这是一条用于验证DraftAgent通过DeepSeek调用createDraft工具并保存到MySQL的测试草案。请调用创建草案工具完成保存，并告诉我草案ID。"
 }
+
+### 创建草案
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "message": "请帮我创建草案，标题：断点调试测试，内容：观察DeepSeek返回的Tool Call"
+}
+
+### 多轮对话测试说明（Batch 1）
+# 以下请求需要 conversationId（标准 UUID 36 字符）。
+# 同一 conversationId 用于验证多轮记忆；不同 conversationId 用于验证会话隔离。
+# 注意：本文件仅作为请求示例，不自动执行；请勿在自动化流程中调用真实 DeepSeek。
+
+### 多轮对话 - 第一轮（记住信息）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "11111111-1111-4111-8111-111111111111",
+  "message": "我叫小明，请记住我的名字。"
+}
+
+### 多轮对话 - 第二轮（同一 conversationId 验证记忆）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "11111111-1111-4111-8111-111111111111",
+  "message": "我叫什么名字？"
+}
+
+### 会话隔离 - 不同 conversationId（不应看到上一会话内容）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "22222222-2222-4222-8222-222222222222",
+  "message": "这是新的会话，你还记得我叫什么名字吗？"
+}
+
+### Batch 2.5：Agent 主流程（conversationId + requestId 必填）
+# 说明：以下请求均需 conversationId 与 requestId（均标准 UUID 36 字符）。
+# requestId 由客户端首次请求前生成；HTTP 超时重试时复用同一 requestId。
+# 注意：V1 不保证整个 HTTP 请求幂等；同 requestId 重试可能产生新的对话轮次/额外模型调用，
+#       但 createDraft 工具会复用原执行结果，绝不重复创建草案。本文件不自动执行。
+
+### 首次对话 + 调用 createDraft（新 requestId）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "33333333-3333-4333-8333-333333333333",
+  "requestId": "44444444-4444-4444-8444-444444444444",
+  "message": "请帮我创建一份草案。标题：Batch2.5-验证-A。内容：这是首次对话创建草案的测试内容。"
+}
+
+### 同一 conversationId 第二轮对话（新的 requestId）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "33333333-3333-4333-8333-333333333333",
+  "requestId": "55555555-5555-4555-8555-555555555555",
+  "message": "刚才创建的草案标题是什么？"
+}
+
+### 新 conversationId 隔离验证（不应看到上一个会话内容）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "66666666-6666-4666-8666-666666666666",
+  "requestId": "77777777-7777-4777-8777-777777777777",
+  "message": "这是全新会话，请回忆我此前创建草案的标题。"
+}
+
+### 相同 requestId 重试（复用原 createDraft 结果，不重复创建草案）
+# 与“首次对话”使用同一 conversationId + 同一 requestId + 相同消息
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "33333333-3333-4333-8333-333333333333",
+  "requestId": "44444444-4444-4444-8444-444444444444",
+  "message": "请帮我创建一份草案。标题：Batch2.5-验证-A。内容：这是首次对话创建草案的测试内容。"
+}
+
+### 相同 requestId 不同参数（应返回业务冲突 409，不重复创建）
+POST http://localhost:8080/draft-agent/ai/chat
+Content-Type: application/json
+
+{
+  "conversationId": "33333333-3333-4333-8333-333333333333",
+  "requestId": "44444444-4444-4444-8444-444444444444",
+  "message": "请帮我创建一份草案。标题：Batch2.5-验证-B。内容：这是与首次请求不同参数的内容。"
+}

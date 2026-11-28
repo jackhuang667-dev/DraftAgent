@@ -10,8 +10,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -84,6 +87,37 @@ public class GlobalExceptionHandler {
     public R<Void> handleHttpMessageNotReadableException(HttpMessageNotReadableException e) {
         log.warn("请求体解析失败: {}", e.getMessage());
         return R.fail(400, "请求体格式错误或缺失");
+    }
+
+    /**
+     * 路径/参数类型转换失败（如 GET /drafts/abc/status）。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMethodArgumentTypeMismatchException(MethodArgumentTypeMismatchException e) {
+        log.warn("参数类型错误: {}", e.getName());
+        String name = e.getName();
+        return R.fail(400, name != null ? "参数类型错误: " + name : "参数类型错误");
+    }
+
+    /**
+     * 缺少必需的请求参数。
+     */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMissingServletRequestParameterException(MissingServletRequestParameterException e) {
+        log.warn("缺少必需参数: {}", e.getParameterName());
+        return R.fail(400, "缺少必需参数: " + e.getParameterName());
+    }
+
+    /**
+     * 不支持的请求内容类型。
+     */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    @ResponseStatus(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+    public R<Void> handleHttpMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException e) {
+        log.warn("不支持的请求内容类型: {}", e.getContentType());
+        return R.fail(415, "不支持的请求内容类型");
     }
 
     /**
