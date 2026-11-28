@@ -38,6 +38,9 @@ build/
 *.log
 logs/
 
+### Local runtime data (document storage) ###
+/data/
+
 ### Local sensitive config ###
 application-local.yml
 application-local.yaml

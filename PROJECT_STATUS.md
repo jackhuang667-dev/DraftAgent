@@ -540,3 +540,50 @@ AiConfig --@Conditional(有Key)--> OpenAiApi -> OpenAiChatModel -> ChatClient
 - 所有身份一律来自服务端 `CurrentUser`，**不接受客户端传入的 `userId` / `tenantId`**。
 - **Qdrant 必须使用相同隔离规则**：向量 payload 需携带 `user_id`、`tenant_id`（及 `document_id`），检索时按同一规则过滤，严禁跨租户/跨用户召回。
 - 实现注意：`tenant_id` 为空时查询须用 `tenant_id IS NULL`（不能用 `= NULL`）；组合可见性查询建议拆为「按 tenant_id」与「按 user_id + tenant_id IS NULL」两次索引查询或 UNION ALL。
+
+---
+
+## 18. Batch 3.3：文档上传 / 文件存储 / 解析 / Chunk 持久化（已完成，未提交）
+
+> 仅实现上传链路；**未**实现列表/详情/下载/删除/重新处理，**未**接入 Embedding / Qdrant。
+
+### 18.1 接口
+- `POST /draft-agent/documents`，`multipart/form-data`，文件字段 `file`；需认证（`/documents/**` authenticated）。
+- 支持 TXT / Markdown(.md) / PDF；单文件上限 20MB（`spring.servlet.multipart.max-file-size=20MB`，业务层再校验 `rag.document.max-file-size-bytes`）。
+- 身份仅取服务端 `CurrentUser`：`user_id`=当前用户，`tenant_id`=当前租户（可空），不接受客户端传入。
+- 返回 `{ documentId, filename, mimeType, fileSize, status, chunkCount }`。
+
+### 18.2 新增/修改文件
+- 新增（business）：`document/DocumentFileType.java`、`document/DocumentParseException.java`、`document/DocumentContentParser.java`、`document/storage/{StoredDocumentFile,DocumentStorage,LocalDocumentStorage}.java`、`service/DocumentService.java`、`service/DocumentTransactionService.java`、`dto/DocumentUploadResponse.java`、`controller/DocumentController.java`。
+- 新增（ai）：`ai/document/SpringAiDocumentContentParser.java`（实现解析端口）。
+- 新增（测试）：`document/DocumentServiceUnitTest.java`、`document/DocumentUploadMockMvcTest.java`。
+- 修改：`draft-agent-ai/pom.xml`（`spring-ai-pdf-document-reader`，版本由 BOM 1.0.9 管理）、`GlobalExceptionHandler`（`MissingServletRequestPartException`→400、`MaxUploadSizeExceededException`→413）、`SecurityConfig`（`/documents/**` authenticated，`anyRequest` 仍 `denyAll`）、`application.yml`（multipart + `rag.*` 配置）、`.gitignore`（`/data/`）。
+
+### 18.3 文件存储与安全
+- 本地存储根：`rag.storage.root`（默认 `./data/documents`，env `DOC_STORAGE_ROOT`；已加入 `.gitignore`）。
+- 磁盘文件名使用 UUID、按 `yyyy/MM/dd` 分目录；原始文件名只入库、不参与路径拼接；`resolve()` 校验结果必须位于根目录内（防路径穿越）。
+- 校验：扩展名 + MIME 双重校验（PDF=`application/pdf`；TXT=`text/plain`；MD=`text/markdown|text/x-markdown|text/plain`）；空文件、超限、缺失 file 分片均拒绝。
+- 保存时流式写入并计算 SHA-256（`document.checksum`）。
+
+### 18.4 解析与分块
+- TXT / Markdown：UTF-8 读取；PDF：`org.springframework.ai.reader.pdf.PagePdfDocumentReader(Resource).get()`（PDFBox 3.0.3，仅文本型 PDF；无有效文本明确报错，扫描件不支持 OCR）。
+- 分块：`TokenTextSplitter.builder()`，参数 `chunkSize=800`、`minChunkSizeChars=350`、`minChunkLengthToEmbed=5`、`maxNumChunks=10000`、`keepSeparator=true`（均可在 `rag.document.*` 配置）。
+- Chunk：`documentPk`、`documentId`、`chunkIndex`（从 0）、`content`、`charCount`、`createdAt`。
+
+### 18.5 事务与失败补偿
+- 流程：校验 → 落盘 → 插入 `PENDING` → `PROCESSING`（CAS）→ 解析（**事务外**）→ 分块+`READY` 同事务原子提交。
+- 任一步失败：标记 `FAILED`（`markFailed` 同时删除该文档残留分块）、删除已落盘文件；返回脱敏错误（422 解析失败 / 503 处理失败）。
+- 分块写入与 READY 在同一事务，失败整体回滚，**不会出现“部分 Chunk + READY”**。
+
+### 18.6 验证结果
+- 编译：`mvn -pl draft-agent-start -am -DskipTests compile` → BUILD SUCCESS。
+- 测试：新增 16 项（服务单测 6 + 上传集成 10），`mvn -B test` → **Tests run: 73, Failures: 0, Errors: 0, Skipped: 0**，BUILD SUCCESS。
+- 覆盖：合法 TXT/MD/PDF、空文件、非法扩展名、MIME 不匹配、超大小限制、未认证、userId 缺失、tenantId 为空个人文档、企业租户保存 tenantId、解析失败 FAILED、Chunk 保存失败不 READY、失败清理。
+
+### 18.7 未完成 / 风险
+- 未实现列表、详情、下载、删除、重新处理（删除/重处理后续仅允许上传者）。
+- 未接入 Embedding / Qdrant。
+- 同步处理：上传请求会等待解析与分块完成（大 PDF 耗时较长），后续可评估异步化。
+- MIME 校验较严格（如部分浏览器对 `.md` 发送 `application/octet-stream` 会被拒绝）。
+- 扫描版 PDF 无文本层 → 明确 FAILED，不支持 OCR。
+- 本地存储为单机磁盘，未做多实例共享存储。

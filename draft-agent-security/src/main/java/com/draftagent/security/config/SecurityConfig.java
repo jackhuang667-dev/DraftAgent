@@ -16,8 +16,8 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 /**
  * Spring Security 配置：无状态 JWT 认证。
  *
- * <p>受保护接口：{@code /ai/**}、{@code /drafts/**}；{@code /health}、{@code /error} 放行。
- * 未认证返回 401，已认证但无权限返回 403。</p>
+ * <p>受保护接口：{@code /ai/**}、{@code /drafts/**}、{@code /documents/**}；
+ * {@code /health}、{@code /error} 放行。未认证返回 401，已认证但无权限返回 403。</p>
  */
 @Configuration
 @EnableWebSecurity
@@ -36,7 +36,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/health", "/error").permitAll()
-                        .requestMatchers("/ai/**", "/drafts/**").authenticated()
+                        .requestMatchers("/ai/**", "/drafts/**", "/documents/**").authenticated()
                         .anyRequest().denyAll())
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(authenticationEntryPoint)

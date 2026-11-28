@@ -12,6 +12,8 @@ import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -118,6 +120,26 @@ public class GlobalExceptionHandler {
     public R<Void> handleHttpMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException e) {
         log.warn("不支持的请求内容类型: {}", e.getContentType());
         return R.fail(415, "不支持的请求内容类型");
+    }
+
+    /**
+     * 缺少 multipart 文件分片（如上传接口未携带 file）。
+     */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public R<Void> handleMissingServletRequestPartException(MissingServletRequestPartException e) {
+        log.warn("缺少上传文件分片: {}", e.getRequestPartName());
+        return R.fail(400, "缺少上传文件");
+    }
+
+    /**
+     * 上传文件超过 multipart 限制。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public R<Void> handleMaxUploadSizeExceededException(MaxUploadSizeExceededException e) {
+        log.warn("上传文件超过大小限制: {}", e.getClass().getSimpleName());
+        return R.fail(413, "上传文件过大，超过允许的最大大小");
     }
 
     /**

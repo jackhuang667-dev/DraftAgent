@@ -33,5 +33,10 @@
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
         </dependency>
+        <!-- PDF 文档解析（PDFBox）：版本由父 POM 的 spring-ai-bom(1.0.9) 管理 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-pdf-document-reader</artifactId>
+        </dependency>
     </dependencies>
 </project>

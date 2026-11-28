@@ -9,6 +9,11 @@ spring:
   profiles:
     # 默认 profile（未显式设置 SPRING_PROFILES_ACTIVE 时使用 dev）；生产需通过 SPRING_PROFILES_ACTIVE 覆盖
     default: dev
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 20MB
+      max-request-size: 25MB
   autoconfigure:
     exclude:
       - org.springframework.ai.model.openai.autoconfigure.OpenAiChatAutoConfiguration
@@ -48,6 +53,18 @@ mybatis-plus:
 jwt:
   # 从环境变量读取；留空时仅开发使用进程内随机密钥（重启后旧 token 失效）
   secret: ${JWT_SECRET:}
+
+rag:
+  storage:
+    # 本地文件存储根目录（纳入 .gitignore，不提交运行数据）
+    root: ${DOC_STORAGE_ROOT:./data/documents}
+  document:
+    # V1 单文件最大 20MB（与 spring.servlet.multipart.max-file-size 保持一致）
+    max-file-size-bytes: ${DOC_MAX_FILE_SIZE_BYTES:20971520}
+    chunk-size: 800
+    min-chunk-size-chars: 350
+    min-chunk-length-to-embed: 5
+    max-num-chunks: 10000
 
 logging:
   level:
